@@ -19,7 +19,33 @@ def checkConfig(path):
 
     for row_index in range(0, sheet.nrows):
         if sheet.cell(row_index, 0).value == 'Decoding canalyser frames':
-            network_list = []
+            network_list = dict()
+            trace_col = -1
+            NMoE_col = -1
+            network_type = -1
+            for col_index in range(0, sheet.ncols):
+                if sheet.cell(row_index + 1, col_index).value == 'trace-bus-name':
+                    trace_col = col_index
+                if sheet.cell(row_index + 1, col_index).value == 'network-type':
+                    network_type = col_index
+                if sheet.cell(row_index + 1, col_index).value == 'NMoE-bus-Name':
+                    NMoE_col = col_index
+            if trace_col != -1 and NMoE_col != -1 and network_type != -1:
+                for index in range(row_index + 2, sheet.nrows):
+                    if sheet.cell(index, trace_col).value != "":
+                        values = {}
+                        try:
+                            value = int(sheet.cell(index, trace_col).value)
+                            name = str(value)
+                        except:
+                            value = sheet.cell(index, trace_col).value
+                            name = value
+                        values['NMoE-bus-name'] = sheet.cell(index, NMoE_col).value
+                        values['network-type'] = sheet.cell(index, network_type).value
+                        network_list[name] = values
+                    else:
+                        break
+
         if sheet.cell(row_index, 0).value == 'Criteria to analyse Ethernet files':
             return_dict['SOURCE-IP'] = sheet.cell(row_index+1, 1).value
             return_dict['DESTINATION-IP'] = sheet.cell(row_index + 2, 1).value
@@ -33,7 +59,8 @@ def checkConfig(path):
             return_dict['LOWER'] = sheet.cell(row_index + 1, 1).value
             return_dict['MIDDLE'] = sheet.cell(row_index + 2, 1).value
             return_dict['GREATER'] = sheet.cell(row_index + 3, 1).value
-    return return_dict
+
+    return return_dict, network_list
 
 
 def readFile(path):
@@ -54,17 +81,20 @@ def filterData(content):
     return return_list
 
 
-def sortData(content):
+def sortData(content, network_list):
     lin_messages = []
     can_messages = []
     eth_messages = []
     for line in content:
-        if " Li " in line:
-            lin_messages.append(line)
-        elif " ETH " in line:
-            eth_messages.append(line)
+        line_splited = line.split(" ")
+        if line_splited[1] in network_list:
+            if network_list[line_splited[1]]['network-type'] == 'LIN':
+                lin_messages.append(line)
+            elif network_list[line_splited[1]]['network-type'] == 'CAN':
+                can_messages.append(line)
         else:
-            can_messages.append(line)
+            eth_messages.append(line)
+
     return lin_messages, can_messages, eth_messages
 
 
@@ -155,7 +185,7 @@ def checkEthernet(message_list, configuration):
     return data_list_total
 
 
-def checkCan(message_list):
+def checkCan(message_list, network_list):
     return_list = []
     for message in message_list[:]:
         if "Error" in message:
@@ -164,17 +194,15 @@ def checkCan(message_list):
         message = message.split()
         can_dict = {}
         can_dict['TIMESTAMP'] = message[0]
-        if message[1] == "1":
-            can_dict['NETWORK'] = "CAN2"
-        else:
-            can_dict['NETWORK'] = "CAN3"
+        if message[1] in network_list:
+            can_dict['NETWORK'] = network_list[message[1]]['NMoE-bus-name']
         can_dict['ID'] = message[2]
         can_dict['DATA'] = message[6]
         return_list.append(can_dict)
     return return_list
 
 
-def checkLin(message_list):
+def checkLin(message_list, network_list):
     return_list = []
     for message in message_list[:]:
         if "checksum" not in message:
@@ -183,7 +211,8 @@ def checkLin(message_list):
         message = message.split()
         lin_dict = {}
         lin_dict['TIMESTAMP'] = message[0]
-        lin_dict['NETWORK'] = "LIN0"
+        if message[1] in network_list:
+            lin_dict['NETWORK'] = network_list[message[1]]['NMoE-bus-name']
         lin_dict['ID'] = message[2]
         lin_dict['DATA'] = message[5] + message[6]
         return_list.append(lin_dict)
@@ -423,7 +452,7 @@ def approx_equal(x, y, tolerance=0.0001):
 
 
 def arg_parse(parser):
-    parser.add_argument('-in', '--inp', help="input .asc file", required=True, default="")
+    parser.add_argument('-in', '--input', help="input .asc file", required=True, default="")
     parser.add_argument('-config', '--config', help="input configuration file file", required=True, default="")
     parser.add_argument('-run1', action="store_const", const="-run1", help="execute only the first step of trace analysis", required=False, default="")
     parser.add_argument('-run2', action="store_const", const="-run2", help="execute the second step of trace analysis", required=False, default="")
@@ -436,7 +465,7 @@ def main():
     parser = argparse.ArgumentParser()
     arg_parse(parser)
     args = parser.parse_args()
-    input_file_path = args.inp
+    input_file_path = args.input
     head, tail = ntpath.split(input_file_path)
     config_file_path = args.config
     if args.run1:
@@ -451,21 +480,22 @@ def main():
         sys.exit(1)
 
     #parse the input files and get relevant data
-    configuration = checkConfig(config_file_path)
+    configuration, network_list = checkConfig(config_file_path)
     content = filterData(readFile(input_file_path))
-    linMsgs, canMsgs, ethMsgs = sortData(content)
+    linMsgs, canMsgs, ethMsgs = sortData(content, network_list)
 
     if first_run:
-        can_data = checkCan(canMsgs)
-        lin_data = checkLin(linMsgs)
+        can_data = checkCan(canMsgs, network_list)
+        lin_data = checkLin(linMsgs, network_list)
         can_lin_data = can_data + lin_data
         can_lin_data = sorted(can_lin_data, key=lambda x: x['TIMESTAMP'])
         eth_data = checkEthernet(ethMsgs, configuration)
         createFirstFile(head, tail, can_lin_data, eth_data)
 
+
     if second_run:
-        can_data = checkCan(canMsgs)
-        lin_data = checkLin(linMsgs)
+        can_data = checkCan(canMsgs, network_list)
+        lin_data = checkLin(linMsgs, network_list)
         can_lin_data = can_data + lin_data
         can_lin_data = sorted(can_lin_data, key=lambda x: x['TIMESTAMP'])
         eth_data = checkEthernet(ethMsgs, configuration)
