@@ -9,6 +9,7 @@ import socket
 import itertools
 import struct
 import argparse
+import string
 from datetime import date, datetime
 
 
@@ -93,7 +94,8 @@ def sortData(content, network_list):
             elif network_list[line_splited[1]]['network-type'] == 'CAN':
                 can_messages.append(line)
         else:
-            eth_messages.append(line)
+            if line_splited[1] == 'ETH':
+                eth_messages.append(line)
 
     return lin_messages, can_messages, eth_messages
 
@@ -102,7 +104,7 @@ def checkEthernet(message_list, configuration):
     parsed_list = []
     data_list_total = []
     for message in message_list[:]:
-        if "Rx" not in message and "Tx" not in message:
+        if " Rx " not in message and " Tx " not in message:
             message_list.remove(message)
 
     for message in message_list:
@@ -193,11 +195,19 @@ def checkCan(message_list, network_list):
     for message in message_list:
         message = message.split()
         can_dict = {}
-        can_dict['TIMESTAMP'] = message[0]
+        can_dict['TIMESTAMP'] = float(message[0])
         if message[1] in network_list:
             can_dict['NETWORK'] = network_list[message[1]]['NMoE-bus-name']
-        can_dict['ID'] = message[2]
-        can_dict['DATA'] = message[6]
+        if all(c in string.hexdigits for c in message[2]):
+            can_dict['ID'] = message[2]
+        else:
+            continue
+        can_dict['DATA'] = ""
+        for index in range(6, len(message)):
+            if message[index] == "Length":
+                break
+            else:
+                can_dict['DATA'] += message[index]
         return_list.append(can_dict)
     return return_list
 
@@ -210,11 +220,18 @@ def checkLin(message_list, network_list):
     for message in message_list:
         message = message.split()
         lin_dict = {}
-        lin_dict['TIMESTAMP'] = message[0]
+        lin_dict['TIMESTAMP'] = float(message[0])
         if message[1] in network_list:
             lin_dict['NETWORK'] = network_list[message[1]]['NMoE-bus-name']
         lin_dict['ID'] = message[2]
-        lin_dict['DATA'] = message[5] + message[6]
+        if all(c in string.hexdigits for c in message[5]):
+            lin_dict['DATA'] = message[5]
+            if all(c in string.hexdigits for c in message[6]):
+                lin_dict['DATA'] = message[5] + message[6]
+            else:
+                pass
+        else:
+            continue
         return_list.append(lin_dict)
     return return_list
 
@@ -286,7 +303,7 @@ def createFirstFile(path, tail, can_lin_data, eth_data):
     sheetLogLinCan.col(0).width = 256 * 15
     sheetLogLinCan.col(1).width = 256 * 15
     sheetLogLinCan.col(2).width = 256 * 15
-    sheetLogLinCan.col(3).width = 256 * 15
+    sheetLogLinCan.col(3).width = 256 * 25
     sheetLogLinCan.write(0, 0, "log time", normal_cell)
     sheetLogLinCan.write(0, 1, "NMoE bus name", normal_cell)
     sheetLogLinCan.write(0, 2, "log frameID", normal_cell)
