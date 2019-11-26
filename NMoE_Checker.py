@@ -87,7 +87,7 @@ def sortData(content, network_list):
     can_messages = []
     eth_messages = []
     for line in content:
-        line_splited = line.split(" ")
+        line_splited = line.split()
         if line_splited[1] in network_list:
             if network_list[line_splited[1]]['network-type'] == 'LIN':
                 lin_messages.append(line)
@@ -156,7 +156,7 @@ def checkEthernet(message_list, configuration):
                 if payload_dict['FRAME-ID-AVAILABILITY'] == '1':
                     if payload_dict['NETWORK-TYPE'] == 1:
                         # treat CAN frames
-                        payload_dict['FRAME-ID'] = int(payload[index + 1] + payload[index + 2] + payload[index + 3])
+                        payload_dict['FRAME-ID'] = int(payload[index + 1] + payload[index + 2] + payload[index + 3], 16)
                         index = index + 4
                     elif payload_dict['NETWORK-TYPE'] == 2:
                         # treat LIN frames
@@ -361,8 +361,11 @@ def createFirstFile(path, tail, can_lin_data, eth_data):
                 network_type = 'INVALID'
             # sheetEth.write(index, 7, xlwt.Formula("G$2 + F" + str(index+1)), normal_cell)
             sheetEth.write(index, 7, "0", normal_cell)
-            sheetEth.write(index, 8, network_type + str(int(line['NETWORK-ID'])), normal_cell)
-            sheetEth.write(index, 9, line['FRAME-ID'], normal_cell)
+            sheetEth.write(index, 8, network_type + str(int(line['NETWORK-ID'], 16)), normal_cell)
+            try:
+                sheetEth.write(index, 9, line['FRAME-ID'], normal_cell)
+            except KeyError:
+                sheetEth.write(index, 9, "Invalid", normal_cell)
             sheetEth.write(index, 10, line['DATA'], normal_cell)
             index = index + 1
 
@@ -454,7 +457,10 @@ def createSecondFile(head, tail, can_lin_data, eth_data):
                     else:
                         network_type = 'INVALID'
                     sheetComparison.write(index, 6, network_type + str(int(eth['NETWORK-ID'])), normal_cell)
-                    sheetComparison.write(index, 7, eth['FRAME-ID'], normal_cell)
+                    try:
+                        sheetEth.write(index, 9, line['FRAME-ID'], normal_cell)
+                    except KeyError:
+                        sheetEth.write(index, 9, "Invalid", normal_cell)
                     sheetComparison.write(index, 8, eth['DATA'], normal_cell)
                     eth_data.remove(eth)
                     break
