@@ -10,6 +10,7 @@ import itertools
 import struct
 import argparse
 import string
+import math
 from datetime import date, datetime
 
 
@@ -24,6 +25,7 @@ def checkConfig(path):
             trace_col = -1
             NMoE_col = -1
             network_type = -1
+            id_col = -1
             for col_index in range(0, sheet.ncols):
                 if sheet.cell(row_index + 1, col_index).value == 'trace-bus-name':
                     trace_col = col_index
@@ -31,7 +33,9 @@ def checkConfig(path):
                     network_type = col_index
                 if sheet.cell(row_index + 1, col_index).value == 'NMoE-bus-Name':
                     NMoE_col = col_index
-            if trace_col != -1 and NMoE_col != -1 and network_type != -1:
+                if sheet.cell(row_index + 1, col_index).value == 'networkID':
+                    id_col = col_index
+            if trace_col != -1 and NMoE_col != -1 and network_type != -1 and id_col != -1:
                 for index in range(row_index + 2, sheet.nrows):
                     if sheet.cell(index, trace_col).value != "":
                         values = {}
@@ -43,6 +47,7 @@ def checkConfig(path):
                             name = value
                         values['NMoE-bus-name'] = sheet.cell(index, NMoE_col).value
                         values['network-type'] = sheet.cell(index, network_type).value
+                        values['network-ID'] = int(sheet.cell(index, id_col).value)
                         network_list[name] = values
                     else:
                         break
@@ -131,58 +136,61 @@ def checkEthernet(message_list, configuration):
             frame_number = 1
             payload = [decoded_data['PAYLOAD'][i:i+n] for i in range(0, len(decoded_data['PAYLOAD']), n)]
             while True:
-                payload_dict = {}
-                index = 0
-                payload_dict['RANK'] = rank
-                payload_dict['SEQUENCE-NUMBER'] = seq_number
-                payload_dict['FRAME-NUMBER'] = frame_number
-                payload_dict['TIMESTAMP'] = message['TIMESTAMP']
-                payload_dict['ETH-TIME'] = int(decoded_data['HEADER_TIMESTAMP'][:12], 16) + int(decoded_data['HEADER_TIMESTAMP'][12:], 16) / 1000000000
-                payload_dict['TIME'] = str((int(payload[index] + payload[index + 1], 16)) * 0.00001)
-                index = index + 2
-                payload_dict['NETWORK-STATE-AVAILABILITY'] = '{0:08b}'.format((int(payload[index], 16)))[:1]
-                payload_dict['FRAME-ID-AVAILABILITY'] = '{0:08b}'.format((int(payload[index], 16)))[1:2]
-                payload_dict['PAYLOAD-AVAILABILITY'] = '{0:08b}'.format((int(payload[index], 16)))[2:3]
-                payload_dict['NETWORK-TYPE'] = int('{0:08b}'.format((int(payload[index], 16)))[3:], 2)
-                index = index + 1
-                payload_dict['NETWORK-ID'] = payload[index]
-                index = index + 1
-                if payload_dict['NETWORK-STATE-AVAILABILITY'] == '1':
-                    payload_dict['NETWORK-STATE'] = payload[index]
+                try:
+                    payload_dict = {}
+                    index = 0
+                    payload_dict['RANK'] = rank
+                    payload_dict['SEQUENCE-NUMBER'] = seq_number
+                    payload_dict['FRAME-NUMBER'] = frame_number
+                    payload_dict['TIMESTAMP'] = message['TIMESTAMP']
+                    payload_dict['ETH-TIME'] = int(decoded_data['HEADER_TIMESTAMP'][:12], 16) + int(decoded_data['HEADER_TIMESTAMP'][12:], 16) / 1000000000
+                    payload_dict['TIME'] = str((int(payload[index] + payload[index + 1], 16)) * 0.00001)
+                    index = index + 2
+                    payload_dict['NETWORK-STATE-AVAILABILITY'] = '{0:08b}'.format((int(payload[index], 16)))[:1]
+                    payload_dict['FRAME-ID-AVAILABILITY'] = '{0:08b}'.format((int(payload[index], 16)))[1:2]
+                    payload_dict['PAYLOAD-AVAILABILITY'] = '{0:08b}'.format((int(payload[index], 16)))[2:3]
+                    payload_dict['NETWORK-TYPE'] = int('{0:08b}'.format((int(payload[index], 16)))[3:], 2)
                     index = index + 1
-                else:
-                    payload_dict['NETWORK-STATE'] = None
-
-                if payload_dict['FRAME-ID-AVAILABILITY'] == '1':
-                    if payload_dict['NETWORK-TYPE'] == 1:
-                        # treat CAN frames
-                        payload_dict['FRAME-ID'] = int(payload[index + 1] + payload[index + 2] + payload[index + 3], 16)
-                        index = index + 4
-                    elif payload_dict['NETWORK-TYPE'] == 2:
-                        # treat LIN frames
-                        payload_dict['FRAME-ID'] = payload[index]
+                    payload_dict['NETWORK-ID'] = payload[index]
+                    index = index + 1
+                    if payload_dict['NETWORK-STATE-AVAILABILITY'] == '1':
+                        payload_dict['NETWORK-STATE'] = payload[index]
                         index = index + 1
-                else:
-                    payload_dict['FRAME-ID'] = None
+                    else:
+                        payload_dict['NETWORK-STATE'] = None
 
-                if payload_dict['PAYLOAD-AVAILABILITY'] == '1':
-                    payload_dict['LENGTH'] = int(payload[index], 16)
-                    index = index + 1
-                    payload_dict['DATA'] = "".join(payload[index:index + payload_dict['LENGTH']])
-                    index = index + payload_dict['LENGTH']
-                else:
-                    payload_dict['LENGTH'] = None
-                    payload_dict['DATA'] = None
+                    if payload_dict['FRAME-ID-AVAILABILITY'] == '1':
+                        if payload_dict['NETWORK-TYPE'] == 1:
+                            # treat CAN frames
+                            payload_dict['FRAME-ID'] = int(payload[index + 1] + payload[index + 2] + payload[index + 3], 16)
+                            index = index + 4
+                        elif payload_dict['NETWORK-TYPE'] == 2:
+                            # treat LIN frames
+                            payload_dict['FRAME-ID'] = int(payload[index], 16)
+                            index = index + 1
+                    else:
+                        payload_dict['FRAME-ID'] = None
 
-                payload = payload[index:]
-                if payload_dict['DATA'] is not None:
-                    data_list.append(payload_dict)
-                    frame_number = frame_number + 1
-                rank = rank + index
+                    if payload_dict['PAYLOAD-AVAILABILITY'] == '1':
+                        payload_dict['LENGTH'] = int(payload[index], 16)
+                        index = index + 1
+                        payload_dict['DATA'] = "".join(payload[index:index + payload_dict['LENGTH']])
+                        index = index + payload_dict['LENGTH']
+                    else:
+                        payload_dict['LENGTH'] = None
+                        payload_dict['DATA'] = None
 
-                if not payload:
-                    data_list = sorted(data_list, key=lambda x: x['TIME'])
-                    data_list_total = data_list_total + data_list
+                    payload = payload[index:]
+                    if payload_dict['DATA'] is not None:
+                        data_list.append(payload_dict)
+                        frame_number = frame_number + 1
+                    rank = rank + index
+
+                    if not payload:
+                        data_list = sorted(data_list, key=lambda x: x['TIME'])
+                        data_list_total = data_list_total + data_list
+                        break
+                except:
                     break
     return data_list_total
 
@@ -198,17 +206,26 @@ def checkCan(message_list, network_list):
         can_dict['TIMESTAMP'] = float(message[0])
         if message[1] in network_list:
             can_dict['NETWORK'] = network_list[message[1]]['NMoE-bus-name']
-        if all(c in string.hexdigits for c in message[2]):
-            can_dict['ID'] = message[2]
-        else:
-            continue
-        can_dict['DATA'] = ""
-        for index in range(6, len(message)):
-            if message[index] == "Length":
-                break
+            if message[1] != "CANFD":
+                if all(c in string.hexdigits for c in message[2]):
+                    can_dict['ID'] = message[2]
+                else:
+                    continue
+                can_dict['LENGTH'] = message[5]
+                can_dict['DATA'] = ""
+                for index in range(6, 6 + int(message[5])):
+                    can_dict['DATA'] += message[index]
+                return_list.append(can_dict)
             else:
-                can_dict['DATA'] += message[index]
-        return_list.append(can_dict)
+                if all(c in string.hexdigits for c in message[4]):
+                    can_dict['ID'] = message[4]
+                else:
+                    continue
+                can_dict['LENGTH'] = message[9]
+                can_dict['DATA'] = ""
+                for index in range(10, 10 + int(message[9])):
+                    can_dict['DATA'] += message[index]
+                return_list.append(can_dict)
     return return_list
 
 
@@ -225,11 +242,9 @@ def checkLin(message_list, network_list):
             lin_dict['NETWORK'] = network_list[message[1]]['NMoE-bus-name']
         lin_dict['ID'] = message[2]
         if all(c in string.hexdigits for c in message[5]):
-            lin_dict['DATA'] = message[5]
-            if all(c in string.hexdigits for c in message[6]):
-                lin_dict['DATA'] = message[5] + message[6]
-            else:
-                pass
+            lin_dict['DATA'] = ""
+            for index in range(5, 5 + int(message[4])):
+                lin_dict['DATA'] += message[index]
         else:
             continue
         return_list.append(lin_dict)
@@ -280,7 +295,7 @@ def get_sheet_by_name(book, name):
         return None
 
 
-def createFirstFile(path, tail, can_lin_data, eth_data):
+def createFirstFile(path, tail, can_lin_data, eth_data, network_list):
     workbook = xlwt.Workbook()
     style_detail_information = xlwt.easyxf('align: wrap on, vert center, horiz center; border : bottom thin,right thin,top thin,left thin;')
     red_cell = xlwt.easyxf('align: wrap on, vert center, horiz center; pattern: pattern solid, fore_colour red; font: colour dark_red, bold False;')
@@ -309,14 +324,17 @@ def createFirstFile(path, tail, can_lin_data, eth_data):
     sheetLogLinCan.write(0, 2, "log frameID", normal_cell)
     sheetLogLinCan.write(0, 3, "log data", normal_cell)
     index = 1
-    for line in can_lin_data:
-        sheetLogLinCan.write(index, 0, str(line['TIMESTAMP']).replace(".", ","), normal_cell)
-        sheetLogLinCan.write(index, 1, line['NETWORK'], normal_cell)
-        sheetLogLinCan.write(index, 2, line['ID'], normal_cell)
-        sheetLogLinCan.write(index, 3, line['DATA'], normal_cell)
-        index = index + 1
+    try:
+        for line in can_lin_data:
+            sheetLogLinCan.write(index, 0, str(line['TIMESTAMP']).replace(".", ","), normal_cell)
+            sheetLogLinCan.write(index, 1, line['NETWORK'], normal_cell)
+            sheetLogLinCan.write(index, 2, line['ID'], normal_cell)
+            sheetLogLinCan.write(index, 3, line['DATA'], normal_cell)
+            index = index + 1
+    except ValueError:
+        pass
 
-    #create and fill eth log sheet
+    # create and fill eth log sheet
     sheetEth = workbook.add_sheet("LOG ETH", cell_overwrite_ok=True)
     sheetEth.col(0).width = 256 * 15
     sheetEth.col(1).width = 256 * 15
@@ -341,39 +359,46 @@ def createFirstFile(path, tail, can_lin_data, eth_data):
     sheetEth.write(0, 9, "ETH_CAN-LIN_FrameID", normal_cell)
     sheetEth.write(0, 10, "ETH_data", normal_cell)
     index = 1
-    for line in eth_data:
-        if line['DATA'] is not None:
-            sheetEth.write(index, 0, line['SEQUENCE-NUMBER'], normal_cell)
-            sheetEth.write(index, 1, line['FRAME-NUMBER'], normal_cell)
-            sheetEth.write(index, 2, line['RANK'], normal_cell)
-            sheetEth.write(index, 3, str(round(float(line['TIME']), 3)).replace(".", ","), normal_cell)
-            sheetEth.write(index, 4, str(round(float(line['ETH-TIME']), 3)).replace(".", ","), normal_cell)
-            sheetEth.write(index, 5, str(round(float(line['TIME']) + float(line['ETH-TIME']), 3)).replace(".", ","), normal_cell)
-            sheetEth.write(index, 6, "0", normal_cell)
-            # sheetEth.write(index, 6, xlwt.Formula("AVERAGE('OFFFSET DATA'!F:F)-AVERAGE('OFFSET DATA'!A:A)"), normal_cell)
-            if line['NETWORK-TYPE'] == 1:
-                network_type = 'CAN'
-            elif line['NETWORK-TYPE'] == 2:
-                network_type = 'LIN'
-            elif line['NETWORK-TYPE'] == 3:
-                network_type = 'Ethernet'
-            else:
-                network_type = 'INVALID'
-            # sheetEth.write(index, 7, xlwt.Formula("G$2 + F" + str(index+1)), normal_cell)
-            sheetEth.write(index, 7, "0", normal_cell)
-            sheetEth.write(index, 8, network_type + str(int(line['NETWORK-ID'], 16)), normal_cell)
-            try:
-                sheetEth.write(index, 9, line['FRAME-ID'], normal_cell)
-            except KeyError:
-                sheetEth.write(index, 9, "Invalid", normal_cell)
-            sheetEth.write(index, 10, line['DATA'], normal_cell)
-            index = index + 1
+    try:
+        for line in eth_data:
+            if line['DATA'] is not None:
+                sheetEth.write(index, 0, line['SEQUENCE-NUMBER'], normal_cell)
+                sheetEth.write(index, 1, line['FRAME-NUMBER'], normal_cell)
+                sheetEth.write(index, 2, line['RANK'], normal_cell)
+                sheetEth.write(index, 3, str(round(float(line['TIME']), 6)).replace(".", ","), normal_cell)
+                sheetEth.write(index, 4, str(round(float(line['ETH-TIME']), 6)).replace(".", ","), normal_cell)
+                sheetEth.write(index, 5, str(round(float(line['TIME']) + float(line['ETH-TIME']), 6)).replace(".", ","), normal_cell)
+                sheetEth.write(index, 6, "0", normal_cell)
+                if line['NETWORK-TYPE'] == 1:
+                    network_type = 'CAN'
+                elif line['NETWORK-TYPE'] == 2:
+                    network_type = 'LIN'
+                elif line['NETWORK-TYPE'] == 3:
+                    network_type = 'Ethernet'
+                else:
+                    network_type = 'INVALID'
+                # sheetEth.write(index, 7, xlwt.Formula("G$2 + F" + str(index+1)), normal_cell)
+                sheetEth.write(index, 7, "0", normal_cell)
+                for network in network_list:
+                    if int(line['NETWORK-ID'], 16) == network_list[network]['network-ID']:
+                        # sheetEth.write(index, 8, network_type + str(int(line['NETWORK-ID'], 16)), normal_cell)
+                        sheetEth.write(index, 8, network_list[network]['NMoE-bus-name'], normal_cell)
+                        break
+                try:
+                    sheetEth.write(index, 9, hex(line['FRAME-ID']).lstrip("0x").rstrip("L"), normal_cell)
+                    # sheetEth.write(index, 9, line['FRAME-ID'], normal_cell)
+                except Exception as e:
+                    sheetEth.write(index, 9, "Invalid", normal_cell)
+                sheetEth.write(index, 10, line['DATA'], normal_cell)
+                index = index + 1
+    except ValueError:
+        pass
 
     workbook.save(path + '\\' + os.path.splitext(tail)[0] + '.xls')
     print("Report file saved!")
 
 
-def createSecondFile(head, tail, can_lin_data, eth_data):
+def createSecondFile(head, tail, can_lin_data, eth_data, network_list, tolerance):
     normal_cell = xlwt.easyxf('align: wrap on, vert center, horiz center;')
     excelFileName = head + "\\" + tail.split(".")[0] + ".xls"
     wb = xlrd.open_workbook(excelFileName, formatting_info=True)
@@ -383,14 +408,16 @@ def createSecondFile(head, tail, can_lin_data, eth_data):
     average_log_time = 0
     count = 0
     for row_index in range(1, sheet.nrows):
-        average_log_time = average_log_time + float(str(sheet.cell(row_index, 5).value).replace(",", "."))
-        count = count + 1
+        if sheet.cell(row_index, 5).value != "":
+            average_log_time = average_log_time + float(str(sheet.cell(row_index, 5).value).replace(",", "."))
+            count = count + 1
     average_log_time = average_log_time / count
     average_calculated_time = 0
     count = 0
     for row_index in range(1, sheet.nrows):
-        average_calculated_time = average_calculated_time + float(str(sheet.cell(row_index, 0).value).replace(",", "."))
-        count = count + 1
+        if sheet.cell(row_index, 0).value != "":
+            average_calculated_time = average_calculated_time + float(str(sheet.cell(row_index, 0).value).replace(",", "."))
+            count = count + 1
     average_calculated_time = average_calculated_time / count
     offset = average_log_time - average_calculated_time
 
@@ -401,21 +428,21 @@ def createSecondFile(head, tail, can_lin_data, eth_data):
         eth_sheet.write(index, 7, xlwt.Formula("G$2 + F" + str(index + 1)), normal_cell)
     # create and fill comparison sheet
     sheetComparison = edit_wb.add_sheet("COMPARISON", cell_overwrite_ok=True)
-    sheetComparison.col(0).width = 256 * 15
-    sheetComparison.col(1).width = 256 * 15
-    sheetComparison.col(2).width = 256 * 15
-    sheetComparison.col(3).width = 256 * 15
-    sheetComparison.col(4).width = 256 * 15
-    sheetComparison.col(5).width = 256 * 15
-    sheetComparison.col(6).width = 256 * 15
-    sheetComparison.col(7).width = 256 * 15
-    sheetComparison.col(8).width = 256 * 15
+    sheetComparison.col(0).width = 256 * 14
+    sheetComparison.col(1).width = 256 * 14
+    sheetComparison.col(2).width = 256 * 14
+    sheetComparison.col(3).width = 256 * 14
+    sheetComparison.col(4).width = 256 * 14
+    sheetComparison.col(5).width = 256 * 14
+    sheetComparison.col(6).width = 256 * 14
+    sheetComparison.col(7).width = 256 * 14
+    sheetComparison.col(8).width = 256 * 14
     sheetComparison.col(9).width = 256 * 2
-    sheetComparison.col(10).width = 256 * 15
-    sheetComparison.col(11).width = 256 * 15
-    sheetComparison.col(12).width = 256 * 15
-    sheetComparison.col(13).width = 256 * 15
-    sheetComparison.col(14).width = 256 * 15
+    sheetComparison.col(10).width = 256 * 14
+    sheetComparison.col(11).width = 256 * 14
+    sheetComparison.col(12).width = 256 * 14
+    sheetComparison.col(13).width = 256 * 14
+    sheetComparison.col(14).width = 256 * 14
     sheetComparison.write(0, 0, "comparison no.", normal_cell)
     sheetComparison.write(0, 1, "ETH Sequence Number", normal_cell)
     sheetComparison.write(0, 2, "ETH CAN-LIN Frame Number", normal_cell)
@@ -432,53 +459,58 @@ def createSecondFile(head, tail, can_lin_data, eth_data):
     sheetComparison.write(0, 13, "Log Data", normal_cell)
     sheetComparison.write(0, 14, "Time Difference", normal_cell)
     index = 1
-    for log in can_lin_data:
-        sheetComparison.write(index, 0, index, normal_cell)
-        sheetComparison.write(index, 10, str(log['TIMESTAMP']).replace(".", ","), normal_cell)
-        sheetComparison.write(index, 11, log['NETWORK'], normal_cell)
-        sheetComparison.write(index, 12, log['ID'], normal_cell)
-        sheetComparison.write(index, 13, log['DATA'], normal_cell)
-        sheetComparison.write(index, 14, xlwt.Formula("F" + str(index + 1) + "-K" + str(index + 1)), normal_cell)
-        for eth in eth_data[:]:
-            if approx_equal(offset + float(eth['TIME']) + float(eth['ETH-TIME']), float(log['TIMESTAMP']), tolerance=0.0002):
-                #if (str(log['ID']).upper() == str(eth['FRAME-ID']).upper()) and (str(log['DATA']).upper() == str(eth['DATA']).upper()):
-                if (str(log['DATA']).upper() == str(eth['DATA']).upper()):
-                    sheetComparison.write(index, 1, eth['SEQUENCE-NUMBER'], normal_cell)
-                    sheetComparison.write(index, 2, eth['FRAME-NUMBER'], normal_cell)
-                    sheetComparison.write(index, 3, eth['RANK'], normal_cell)
-                    sheetComparison.write(index, 4, str(round(float(eth['TIME']) + float(eth['ETH-TIME']), 3)).replace(".", ","), normal_cell)
-                    sheetComparison.write(index, 5, xlwt.Formula("AVERAGE('OFFSET DATA'!F$2:F$11)-AVERAGE('OFFSET DATA'!A$2:A$11) + E" + str(index+1)), normal_cell)
-                    if eth['NETWORK-TYPE'] == 1:
-                        network_type = 'CAN'
-                    elif eth['NETWORK-TYPE'] == 2:
-                        network_type = 'LIN'
-                    elif eth['NETWORK-TYPE'] == 3:
-                        network_type = 'Ethernet'
-                    else:
-                        network_type = 'INVALID'
-                    sheetComparison.write(index, 6, network_type + str(int(eth['NETWORK-ID'])), normal_cell)
+    try:
+        for log in can_lin_data:
+            sheetComparison.write(index, 0, index, normal_cell)
+            sheetComparison.write(index, 10, str(log['TIMESTAMP']).replace(".", ","), normal_cell)
+            sheetComparison.write(index, 11, log['NETWORK'], normal_cell)
+            sheetComparison.write(index, 12, log['ID'], normal_cell)
+            sheetComparison.write(index, 13, log['DATA'], normal_cell)
+            sheetComparison.write(index, 14, xlwt.Formula("F" + str(index + 1) + "-K" + str(index + 1)), normal_cell)
+            for eth in eth_data[:]:
+                if math.isclose(offset + float(eth['TIME']) + float(eth['ETH-TIME']), float(log['TIMESTAMP']), rel_tol=tolerance):
                     try:
-                        sheetEth.write(index, 9, line['FRAME-ID'], normal_cell)
-                    except KeyError:
-                        sheetEth.write(index, 9, "Invalid", normal_cell)
-                    sheetComparison.write(index, 8, eth['DATA'], normal_cell)
-                    eth_data.remove(eth)
-                    break
-        index = index + 1
+                        if (str(log['ID']).upper() == str(eth['FRAME-ID'].to_bytes(((eth['FRAME-ID'].bit_length() + 7) // 8),"big").hex()).upper().lstrip("0")) and (str(log['DATA']).upper() == str(eth['DATA']).upper()):
+                            sheetComparison.write(index, 1, eth['SEQUENCE-NUMBER'], normal_cell)
+                            sheetComparison.write(index, 2, eth['FRAME-NUMBER'], normal_cell)
+                            sheetComparison.write(index, 3, eth['RANK'], normal_cell)
+                            sheetComparison.write(index, 4, str(round(float(eth['TIME']) + float(eth['ETH-TIME']), 8)).replace(".", ","), normal_cell)
+                            sheetComparison.write(index, 5, xlwt.Formula("AVERAGE('OFFSET DATA'!F$2:F$11)-AVERAGE('OFFSET DATA'!A$2:A$11) + E" + str(index+1)), normal_cell)
+                            if eth['NETWORK-TYPE'] == 1:
+                                network_type = 'CAN'
+                            elif eth['NETWORK-TYPE'] == 2:
+                                network_type = 'LIN'
+                            elif eth['NETWORK-TYPE'] == 3:
+                                network_type = 'Ethernet'
+                            else:
+                                network_type = 'INVALID'
+                            for network in network_list:
+                                if int(eth['NETWORK-ID'], 16) == network_list[network]['network-ID']:
+                                    sheetComparison.write(index, 6, network_list[network]['NMoE-bus-name'], normal_cell)
+                                    break
+                            try:
+                                sheetComparison.write(index, 7, eth['FRAME-ID'].to_bytes(((eth['FRAME-ID'].bit_length() + 7) // 8), "big").hex(), normal_cell)
+                            except KeyError:
+                                sheetComparison.write(index, 7, "Invalid", normal_cell)
+                            sheetComparison.write(index, 8, eth['DATA'], normal_cell)
+                            eth_data.remove(eth)
+                            break
+                    except:
+                        pass
+            index = index + 1
+    except ValueError:
+        pass
 
     edit_wb.save(excelFileName)
     print("Report file saved!")
 
 
-def approx_equal(x, y, tolerance=0.0001):
-    return abs(x-y) <= 0.5 * tolerance * (x + y)
-
-
 def arg_parse(parser):
     parser.add_argument('-in', '--input', help="input .asc file", required=True, default="")
-    parser.add_argument('-config', '--config', help="input configuration file file", required=True, default="")
+    parser.add_argument('-config', '--config', help="input configuration file", required=True, default="")
     parser.add_argument('-run1', action="store_const", const="-run1", help="execute only the first step of trace analysis", required=False, default="")
     parser.add_argument('-run2', action="store_const", const="-run2", help="execute the second step of trace analysis", required=False, default="")
+    parser.add_argument('-tolerance', '--tolerance', help="toleration to use when approximating times (default = 0.0002)", required=False, default="0.0002")
 
 
 def main():
@@ -491,6 +523,7 @@ def main():
     input_file_path = args.input
     head, tail = ntpath.split(input_file_path)
     config_file_path = args.config
+    tolerance = float(args.tolerance)
     if args.run1:
         first_run = True
     if args.run2:
@@ -513,8 +546,7 @@ def main():
         can_lin_data = can_data + lin_data
         can_lin_data = sorted(can_lin_data, key=lambda x: x['TIMESTAMP'])
         eth_data = checkEthernet(ethMsgs, configuration)
-        createFirstFile(head, tail, can_lin_data, eth_data)
-
+        createFirstFile(head, tail, can_lin_data, eth_data, network_list)
 
     if second_run:
         can_data = checkCan(canMsgs, network_list)
@@ -522,7 +554,7 @@ def main():
         can_lin_data = can_data + lin_data
         can_lin_data = sorted(can_lin_data, key=lambda x: x['TIMESTAMP'])
         eth_data = checkEthernet(ethMsgs, configuration)
-        createSecondFile(head, tail, can_lin_data, eth_data)
+        createSecondFile(head, tail, can_lin_data, eth_data, network_list, tolerance)
 
 
 if __name__ == "__main__":
